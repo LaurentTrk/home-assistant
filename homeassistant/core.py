@@ -5,31 +5,31 @@ Home Assistant is a Home Automation framework for observing the state
 of entities and react to changes.
 """
 
-import os
-import time
-import logging
-import signal
-import threading
 import enum
 import functools as ft
-from collections import namedtuple
+import logging
+import os
+import signal
+import threading
+import time
+from types import MappingProxyType
 
-from homeassistant.const import (
-    __version__, EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP,
-    SERVICE_HOMEASSISTANT_STOP, SERVICE_HOMEASSISTANT_RESTART,
-    EVENT_TIME_CHANGED, EVENT_STATE_CHANGED,
-    EVENT_CALL_SERVICE, ATTR_NOW, ATTR_DOMAIN, ATTR_SERVICE, MATCH_ALL,
-    EVENT_SERVICE_EXECUTED, ATTR_SERVICE_CALL_ID, EVENT_SERVICE_REGISTERED,
-    TEMP_CELCIUS, TEMP_FAHRENHEIT, ATTR_FRIENDLY_NAME, ATTR_SERVICE_DATA,
-    RESTART_EXIT_CODE)
-from homeassistant.exceptions import (
-    HomeAssistantError, InvalidEntityFormatError)
+import homeassistant.helpers.temperature as temp_helper
 import homeassistant.util as util
 import homeassistant.util.dt as dt_util
 import homeassistant.util.location as location
-from homeassistant.helpers.entity import valid_entity_id, split_entity_id
-import homeassistant.helpers.temperature as temp_helper
 from homeassistant.config import get_default_config_dir
+from homeassistant.const import (
+    ATTR_DOMAIN, ATTR_FRIENDLY_NAME, ATTR_NOW, ATTR_SERVICE,
+    ATTR_SERVICE_CALL_ID, ATTR_SERVICE_DATA, EVENT_CALL_SERVICE,
+    EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP,
+    EVENT_SERVICE_EXECUTED, EVENT_SERVICE_REGISTERED, EVENT_STATE_CHANGED,
+    EVENT_TIME_CHANGED, MATCH_ALL, RESTART_EXIT_CODE,
+    SERVICE_HOMEASSISTANT_RESTART, SERVICE_HOMEASSISTANT_STOP, TEMP_CELCIUS,
+    TEMP_FAHRENHEIT, __version__)
+from homeassistant.exceptions import (
+    HomeAssistantError, InvalidEntityFormatError)
+from homeassistant.helpers.entity import split_entity_id, valid_entity_id
 
 DOMAIN = "homeassistant"
 
@@ -45,9 +45,6 @@ SERVICE_CALL_LIMIT = 10  # seconds
 MIN_WORKER_THREAD = 2
 
 _LOGGER = logging.getLogger(__name__)
-
-# Temporary to support deprecated methods
-_MockHA = namedtuple("MockHomeAssistant", ['bus'])
 
 
 class HomeAssistant(object):
@@ -106,53 +103,8 @@ class HomeAssistant(object):
     def stop(self):
         """Stop Home Assistant and shuts down all threads."""
         _LOGGER.info("Stopping")
-
         self.bus.fire(EVENT_HOMEASSISTANT_STOP)
-
-        # Wait till all responses to homeassistant_stop are done
-        self.pool.block_till_done()
-
         self.pool.stop()
-
-    def track_point_in_time(self, action, point_in_time):
-        """Deprecated method as of 8/4/2015 to track point in time."""
-        _LOGGER.warning(
-            'hass.track_point_in_time is deprecated. '
-            'Please use homeassistant.helpers.event.track_point_in_time')
-        import homeassistant.helpers.event as helper
-        helper.track_point_in_time(self, action, point_in_time)
-
-    def track_point_in_utc_time(self, action, point_in_time):
-        """Deprecated method as of 8/4/2015 to track point in UTC time."""
-        _LOGGER.warning(
-            'hass.track_point_in_utc_time is deprecated. '
-            'Please use homeassistant.helpers.event.track_point_in_utc_time')
-        import homeassistant.helpers.event as helper
-        helper.track_point_in_utc_time(self, action, point_in_time)
-
-    def track_utc_time_change(self, action,
-                              year=None, month=None, day=None,
-                              hour=None, minute=None, second=None):
-        """Deprecated method as of 8/4/2015 to track UTC time change."""
-        # pylint: disable=too-many-arguments
-        _LOGGER.warning(
-            'hass.track_utc_time_change is deprecated. '
-            'Please use homeassistant.helpers.event.track_utc_time_change')
-        import homeassistant.helpers.event as helper
-        helper.track_utc_time_change(self, action, year, month, day, hour,
-                                     minute, second)
-
-    def track_time_change(self, action,
-                          year=None, month=None, day=None,
-                          hour=None, minute=None, second=None, utc=False):
-        """Deprecated method as of 8/4/2015 to track time change."""
-        # pylint: disable=too-many-arguments
-        _LOGGER.warning(
-            'hass.track_time_change is deprecated. '
-            'Please use homeassistant.helpers.event.track_time_change')
-        import homeassistant.helpers.event as helper
-        helper.track_time_change(self, action, year, month, day, hour,
-                                 minute, second)
 
 
 class JobPriority(util.OrderedEnum):
@@ -180,12 +132,13 @@ class JobPriority(util.OrderedEnum):
 
 
 class EventOrigin(enum.Enum):
-    """Represents origin of an event."""
+    """Represent the origin of an event."""
 
     local = "LOCAL"
     remote = "REMOTE"
 
     def __str__(self):
+        """Return the event."""
         return self.value
 
 
@@ -214,6 +167,7 @@ class Event(object):
         }
 
     def __repr__(self):
+        """Return the representation."""
         # pylint: disable=maybe-no-member
         if self.data:
             return "<Event {}[{}]: {}>".format(
@@ -224,6 +178,7 @@ class Event(object):
                                            str(self.origin)[0])
 
     def __eq__(self, other):
+        """Return the comparison."""
         return (self.__class__ == other.__class__ and
                 self.event_type == other.event_type and
                 self.data == other.data and
@@ -294,7 +249,7 @@ class EventBus(object):
         """
         @ft.wraps(listener)
         def onetime_listener(event):
-            """Remove listener from eventbus and then fires listener."""
+            """Remove listener from eventbus and then fire listener."""
             if hasattr(onetime_listener, 'run'):
                 return
             # Set variable so that we will never run twice.
@@ -329,8 +284,7 @@ class EventBus(object):
 
 
 class State(object):
-    """
-    Object to represent a state within the state machine.
+    """Object to represent a state within the state machine.
 
     entity_id: the entity that is represented.
     state: the state of the entity
@@ -352,8 +306,8 @@ class State(object):
                 "Format should be <domain>.<object_id>").format(entity_id))
 
         self.entity_id = entity_id.lower()
-        self.state = state
-        self.attributes = attributes or {}
+        self.state = str(state)
+        self.attributes = MappingProxyType(attributes or {})
         self.last_updated = dt_util.strip_microseconds(
             last_updated or dt_util.utcnow())
 
@@ -381,12 +335,6 @@ class State(object):
             self.attributes.get(ATTR_FRIENDLY_NAME) or
             self.object_id.replace('_', ' '))
 
-    def copy(self):
-        """Return a copy of the state."""
-        return State(self.entity_id, self.state,
-                     dict(self.attributes), self.last_changed,
-                     self.last_updated)
-
     def as_dict(self):
         """Return a dict representation of the State.
 
@@ -395,7 +343,7 @@ class State(object):
         """
         return {'entity_id': self.entity_id,
                 'state': self.state,
-                'attributes': self.attributes,
+                'attributes': dict(self.attributes),
                 'last_changed': dt_util.datetime_to_str(self.last_changed),
                 'last_updated': dt_util.datetime_to_str(self.last_updated)}
 
@@ -423,12 +371,14 @@ class State(object):
                    json_dict.get('attributes'), last_changed, last_updated)
 
     def __eq__(self, other):
+        """Return the comparison of the state."""
         return (self.__class__ == other.__class__ and
                 self.entity_id == other.entity_id and
                 self.state == other.state and
                 self.attributes == other.attributes)
 
     def __repr__(self):
+        """Return the representation of the states."""
         attr = "; {}".format(util.repr_helper(self.attributes)) \
                if self.attributes else ""
 
@@ -453,20 +403,18 @@ class StateMachine(object):
 
         domain_filter = domain_filter.lower()
 
-        return [state.entity_id for state in self._states.values()
-                if state.domain == domain_filter]
+        with self._lock:
+            return [state.entity_id for state in self._states.values()
+                    if state.domain == domain_filter]
 
     def all(self):
         """Create a list of all states."""
         with self._lock:
-            return [state.copy() for state in self._states.values()]
+            return list(self._states.values())
 
     def get(self, entity_id):
         """Retrieve state of entity_id or None if not found."""
-        state = self._states.get(entity_id.lower())
-
-        # Make a copy so people won't mutate the state
-        return state.copy() if state else None
+        return self._states.get(entity_id.lower())
 
     def is_state(self, entity_id, state):
         """Test if entity exists and is specified state."""
@@ -490,7 +438,20 @@ class StateMachine(object):
         entity_id = entity_id.lower()
 
         with self._lock:
-            return self._states.pop(entity_id, None) is not None
+            old_state = self._states.pop(entity_id, None)
+
+            if old_state is None:
+                return False
+
+            event_data = {
+                'entity_id': entity_id,
+                'old_state': old_state,
+                'new_state': None,
+            }
+
+            self._bus.fire(EVENT_STATE_CHANGED, event_data)
+
+            return True
 
     def set(self, entity_id, new_state, attributes=None):
         """Set the state of an entity, add entity if it does not exist.
@@ -520,21 +481,13 @@ class StateMachine(object):
             state = State(entity_id, new_state, attributes, last_changed)
             self._states[entity_id] = state
 
-            event_data = {'entity_id': entity_id, 'new_state': state}
-
-            if old_state:
-                event_data['old_state'] = old_state
+            event_data = {
+                'entity_id': entity_id,
+                'old_state': old_state,
+                'new_state': state,
+            }
 
             self._bus.fire(EVENT_STATE_CHANGED, event_data)
-
-    def track_change(self, entity_ids, action, from_state=None, to_state=None):
-        """DEPRECATED AS OF 8/4/2015."""
-        _LOGGER.warning(
-            'hass.states.track_change is deprecated. '
-            'Use homeassistant.helpers.event.track_state_change instead.')
-        import homeassistant.helpers.event as helper
-        helper.track_state_change(_MockHA(self._bus), entity_ids, action,
-                                  from_state, to_state)
 
 
 # pylint: disable=too-few-public-methods
@@ -575,6 +528,7 @@ class ServiceCall(object):
         self.call_id = call_id
 
     def __repr__(self):
+        """Return the represenation of the service."""
         if self.data:
             return "<ServiceCall {}.{}: {}>".format(
                 self.domain, self.service, util.repr_helper(self.data))
@@ -821,7 +775,7 @@ def create_timer(hass, interval=TIMER_INTERVAL):
 
     def start_timer(event):
         """Start the timer."""
-        thread = threading.Thread(target=timer)
+        thread = threading.Thread(target=timer, name='Timer')
         thread.daemon = True
         thread.start()
 

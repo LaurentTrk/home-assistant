@@ -1,7 +1,5 @@
 """
-homeassistant.components.thermostat.honeywell
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Adds support for Honeywell Round Connected and Honeywell Evohome thermostats.
+Support for Honeywell Round Connected and Honeywell Evohome thermostats.
 
 For more details about this platform, please refer to the documentation at
 https://home-assistant.io/components/thermostat.honeywell/
@@ -9,28 +7,25 @@ https://home-assistant.io/components/thermostat.honeywell/
 import logging
 import socket
 
-import requests
-
 from homeassistant.components.thermostat import ThermostatDevice
-from homeassistant.const import (CONF_USERNAME, CONF_PASSWORD, TEMP_CELCIUS,
-                                 TEMP_FAHRENHEIT)
+from homeassistant.const import (
+    CONF_PASSWORD, CONF_USERNAME, TEMP_CELCIUS, TEMP_FAHRENHEIT)
 
-REQUIREMENTS = ['evohomeclient==0.2.4']
+REQUIREMENTS = ['evohomeclient==0.2.4',
+                'somecomfort==0.2.1']
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_AWAY_TEMP = "away_temperature"
-US_SYSTEM_SWITCH_POSITIONS = {1: 'Heat',
-                              2: 'Off',
-                              3: 'Cool'}
-US_BASEURL = 'https://mytotalconnectcomfort.com/portal'
+DEFAULT_AWAY_TEMP = 16
 
 
 def _setup_round(username, password, config, add_devices):
+    """Setup rounding function."""
     from evohomeclient import EvohomeClient
 
     try:
-        away_temp = float(config.get(CONF_AWAY_TEMP, 16))
+        away_temp = float(config.get(CONF_AWAY_TEMP, DEFAULT_AWAY_TEMP))
     except ValueError:
         _LOGGER.error("value entered for item %s should convert to a number",
                       CONF_AWAY_TEMP)
@@ -50,31 +45,62 @@ def _setup_round(username, password, config, add_devices):
             "Connection error logging into the honeywell evohome web service"
         )
         return False
+    return True
+
+
+# config will be used later
+# pylint: disable=unused-argument
+def _setup_us(username, password, config, add_devices):
+    """Setup user."""
+    import somecomfort
+
+    try:
+        client = somecomfort.SomeComfort(username, password)
+    except somecomfort.AuthError:
+        _LOGGER.error('Failed to login to honeywell account %s', username)
+        return False
+    except somecomfort.SomeComfortError as ex:
+        _LOGGER.error('Failed to initialize honeywell client: %s', str(ex))
+        return False
+
+    dev_id = config.get('thermostat')
+    loc_id = config.get('location')
+
+    add_devices([HoneywellUSThermostat(client, device)
+                 for location in client.locations_by_id.values()
+                 for device in location.devices_by_id.values()
+                 if ((not loc_id or location.locationid == loc_id) and
+                     (not dev_id or device.deviceid == dev_id))])
+    return True
 
 
 # pylint: disable=unused-argument
 def setup_platform(hass, config, add_devices, discovery_info=None):
-    """ Sets up the honeywel thermostat. """
+    """Setup the honeywel thermostat."""
     username = config.get(CONF_USERNAME)
     password = config.get(CONF_PASSWORD)
-    thermostat_id = config.get('id')
+    region = config.get('region', 'eu').lower()
 
     if username is None or password is None:
         _LOGGER.error("Missing required configuration items %s or %s",
                       CONF_USERNAME, CONF_PASSWORD)
         return False
+    if region not in ('us', 'eu'):
+        _LOGGER.error('Region `%s` is invalid (use either us or eu)', region)
+        return False
 
-    if thermostat_id:
-        add_devices([HoneywellUSThermostat(thermostat_id, username, password)])
+    if region == 'us':
+        return _setup_us(username, password, config, add_devices)
     else:
         return _setup_round(username, password, config, add_devices)
 
 
 class RoundThermostat(ThermostatDevice):
-    """ Represents a Honeywell Round Connected thermostat. """
+    """Representation of a Honeywell Round Connected thermostat."""
 
     # pylint: disable=too-many-instance-attributes
     def __init__(self, device, zone_id, master, away_temp):
+        """Initialize the thermostat."""
         self.device = device
         self._current_temperature = None
         self._target_temperature = None
@@ -88,50 +114,52 @@ class RoundThermostat(ThermostatDevice):
 
     @property
     def name(self):
-        """ Returns the name of the honeywell, if any. """
+        """Return the name of the honeywell, if any."""
         return self._name
 
     @property
     def unit_of_measurement(self):
-        """ Unit of measurement this thermostat expresses itself in. """
+        """Return the unit of measurement."""
         return TEMP_CELCIUS
 
     @property
     def current_temperature(self):
-        """ Returns the current temperature. """
+        """Return the current temperature."""
         return self._current_temperature
 
     @property
     def target_temperature(self):
-        """ Returns the temperature we try to reach. """
+        """Return the temperature we try to reach."""
         if self._is_dhw:
             return None
         return self._target_temperature
 
     def set_temperature(self, temperature):
-        """ Set new target temperature """
+        """Set new target temperature."""
         self.device.set_temperature(self._name, temperature)
 
     @property
     def is_away_mode_on(self):
-        """ Returns if away mode is on. """
+        """Return true if away mode is on."""
         return self._away
 
     def turn_away_mode_on(self):
-        """ Turns away on.
-         Evohome does have a proprietary away mode, but it doesn't really work
-         the way it should. For example: If you set a temperature manually
-         it doesn't get overwritten when away mode is switched on.
-         """
+        """Turn away on.
+
+        Evohome does have a proprietary away mode, but it doesn't really work
+        the way it should. For example: If you set a temperature manually
+        it doesn't get overwritten when away mode is switched on.
+        """
         self._away = True
         self.device.set_temperature(self._name, self._away_temp)
 
     def turn_away_mode_off(self):
-        """ Turns away off. """
+        """Turn away off."""
         self._away = False
         self.device.cancel_temp_override(self._name)
 
     def update(self):
+        """Get the latest date."""
         try:
             # Only refresh if this is the "master" device,
             # others will pick up the cache
@@ -155,114 +183,65 @@ class RoundThermostat(ThermostatDevice):
 
 
 class HoneywellUSThermostat(ThermostatDevice):
-    """ Represents a Honeywell US Thermostat. """
+    """Representation of a Honeywell US Thermostat."""
 
-    def __init__(self, ident, username, password):
-        self._ident = ident
-        self._username = username
-        self._password = password
-        self._session = requests.Session()
-        # Maybe this should be configurable?
-        self._timeout = 30
-        # Yeah, really.
-        self._session.headers['X-Requested-With'] = 'XMLHttpRequest'
-        self._update()
-
-    def _login(self):
-        self._session.get(US_BASEURL, timeout=self._timeout)
-        params = {'UserName': self._username,
-                  'Password': self._password,
-                  'RememberMe': 'false',
-                  'timeOffset': 480}
-        resp = self._session.post(US_BASEURL, params=params,
-                                  timeout=self._timeout)
-        if resp.status_code != 200:
-            _LOGGER('Login failed for user %(user)s',
-                    dict(user=self._username))
-            return False
-        else:
-            return True
-
-    def _get_data(self):
-        if not self._login():
-            return
-        url = '%s/Device/CheckDataSession/%s' % (US_BASEURL, self._ident)
-        resp = self._session.get(url, timeout=self._timeout)
-        if resp.status_code < 300:
-            return resp.json()
-        else:
-            return {'error': resp.status_code}
-
-    def _set_data(self, data):
-        if not self._login():
-            return
-        url = '%s/Device/SubmitControlScreenChanges' % US_BASEURL
-        data['DeviceID'] = self._ident
-        resp = self._session.post(url, data=data, timeout=self._timeout)
-        if resp.status_code < 300:
-            return resp.json()
-        else:
-            return {'error': resp.status_code}
-
-    def _update(self):
-        self._data = self._get_data()['latestData']
+    def __init__(self, client, device):
+        """Initialize the thermostat."""
+        self._client = client
+        self._device = device
 
     @property
     def is_fan_on(self):
-        return self._data['fanData']['fanIsRunning']
+        """Return true if fan is on."""
+        return self._device.fan_running
 
     @property
     def name(self):
-        return 'honeywell'
+        """Return the name of the honeywell, if any."""
+        return self._device.name
 
     @property
     def unit_of_measurement(self):
-        unit = self._data['uiData']['DisplayUnits']
-        if unit == 'F':
-            return TEMP_FAHRENHEIT
-        else:
-            return TEMP_CELCIUS
+        """Return the unit of measurement."""
+        return (TEMP_CELCIUS if self._device.temperature_unit == 'C'
+                else TEMP_FAHRENHEIT)
 
     @property
     def current_temperature(self):
-        self._update()
-        return self._data['uiData']['DispTemperature']
+        """Return the current temperature."""
+        self._device.refresh()
+        return self._device.current_temperature
 
     @property
     def target_temperature(self):
-        setpoint = US_SYSTEM_SWITCH_POSITIONS.get(
-            self._data['uiData']['SystemSwitchPosition'],
-            'Off')
-        return self._data['uiData']['%sSetpoint' % setpoint]
+        """Return the temperature we try to reach."""
+        if self._device.system_mode == 'cool':
+            return self._device.setpoint_cool
+        else:
+            return self._device.setpoint_heat
 
     def set_temperature(self, temperature):
-        """ Set target temperature. """
-        data = {'SystemSwitch': None,
-                'HeatSetpoint': None,
-                'CoolSetpoint': None,
-                'HeatNextPeriod': None,
-                'CoolNextPeriod': None,
-                'StatusHeat': None,
-                'StatusCool': None,
-                'FanMode': None}
-        setpoint = US_SYSTEM_SWITCH_POSITIONS.get(
-            self._data['uiData']['SystemSwitchPosition'],
-            'Off')
-        data['%sSetpoint' % setpoint] = temperature
-        self._set_data(data)
+        """Set target temperature."""
+        import somecomfort
+        try:
+            if self._device.system_mode == 'cool':
+                self._device.setpoint_cool = temperature
+            else:
+                self._device.setpoint_heat = temperature
+        except somecomfort.SomeComfortError:
+            _LOGGER.error('Temperature %.1f out of range', temperature)
 
     @property
     def device_state_attributes(self):
-        """ Return device specific state attributes. """
-        fanmodes = {0: "auto",
-                    1: "on",
-                    2: "circulate"}
-        return {"fan": (self._data['fanData']['fanIsRunning'] and
-                        'running' or 'idle'),
-                "fanmode": fanmodes[self._data['fanData']['fanMode']]}
+        """Return the device specific state attributes."""
+        return {'fan': (self.is_fan_on and 'running' or 'idle'),
+                'fanmode': self._device.fan_mode,
+                'system_mode': self._device.system_mode}
 
     def turn_away_mode_on(self):
+        """Turn away on."""
         pass
 
     def turn_away_mode_off(self):
+        """Turn away off."""
         pass

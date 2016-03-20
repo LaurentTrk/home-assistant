@@ -1,7 +1,5 @@
 """
-homeassistant.components.mqtt
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-MQTT component, using paho-mqtt.
+Support for MQTT message handling..
 
 For more details about this component, please refer to the documentation at
 https://home-assistant.io/components/mqtt/
@@ -12,9 +10,11 @@ import socket
 import time
 
 
+from homeassistant.bootstrap import prepare_setup_platform
+from homeassistant.config import load_yaml_config_file
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.util as util
-from homeassistant.helpers import validate_config
+from homeassistant.helpers import template
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_START, EVENT_HOMEASSISTANT_STOP)
 
@@ -29,6 +29,7 @@ EVENT_MQTT_MESSAGE_RECEIVED = 'mqtt_message_received'
 
 REQUIREMENTS = ['paho-mqtt==1.1']
 
+CONF_EMBEDDED = 'embedded'
 CONF_BROKER = 'broker'
 CONF_PORT = 'port'
 CONF_CLIENT_ID = 'client_id'
@@ -49,24 +50,34 @@ DEFAULT_PROTOCOL = PROTOCOL_311
 
 ATTR_TOPIC = 'topic'
 ATTR_PAYLOAD = 'payload'
+ATTR_PAYLOAD_TEMPLATE = 'payload_template'
 ATTR_QOS = 'qos'
 ATTR_RETAIN = 'retain'
 
 MAX_RECONNECT_WAIT = 300  # seconds
 
 
-def publish(hass, topic, payload, qos=None, retain=None):
-    """Publish message to an MQTT topic."""
-    data = {
-        ATTR_TOPIC: topic,
-        ATTR_PAYLOAD: payload,
-    }
+def _build_publish_data(topic, qos, retain):
+    """Build the arguments for the publish service without the payload."""
+    data = {ATTR_TOPIC: topic}
     if qos is not None:
         data[ATTR_QOS] = qos
-
     if retain is not None:
         data[ATTR_RETAIN] = retain
+    return data
 
+
+def publish(hass, topic, payload, qos=None, retain=None):
+    """Publish message to an MQTT topic."""
+    data = _build_publish_data(topic, qos, retain)
+    data[ATTR_PAYLOAD] = payload
+    hass.services.call(DOMAIN, SERVICE_PUBLISH, data)
+
+
+def publish_template(hass, topic, payload_template, qos=None, retain=None):
+    """Publish message to an MQTT topic using a template payload."""
+    data = _build_publish_data(topic, qos, retain)
+    data[ATTR_PAYLOAD_TEMPLATE] = payload_template
     hass.services.call(DOMAIN, SERVICE_PUBLISH, data)
 
 
@@ -82,21 +93,50 @@ def subscribe(hass, topic, callback, qos=DEFAULT_QOS):
     MQTT_CLIENT.subscribe(topic, qos)
 
 
+def _setup_server(hass, config):
+    """Try to start embedded MQTT broker."""
+    conf = config.get(DOMAIN, {})
+
+    # Only setup if embedded config passed in or no broker specified
+    if CONF_EMBEDDED not in conf and CONF_BROKER in conf:
+        return None
+
+    server = prepare_setup_platform(hass, config, DOMAIN, 'server')
+
+    if server is None:
+        _LOGGER.error('Unable to load embedded server.')
+        return None
+
+    success, broker_config = server.start(hass, conf.get(CONF_EMBEDDED))
+
+    return success and broker_config
+
+
 def setup(hass, config):
     """Start the MQTT protocol service."""
-    if not validate_config(config, {DOMAIN: ['broker']}, _LOGGER):
-        return False
+    # pylint: disable=too-many-locals
+    conf = config.get(DOMAIN, {})
 
-    conf = config[DOMAIN]
-
-    broker = conf[CONF_BROKER]
-    port = util.convert(conf.get(CONF_PORT), int, DEFAULT_PORT)
     client_id = util.convert(conf.get(CONF_CLIENT_ID), str)
     keepalive = util.convert(conf.get(CONF_KEEPALIVE), int, DEFAULT_KEEPALIVE)
-    username = util.convert(conf.get(CONF_USERNAME), str)
-    password = util.convert(conf.get(CONF_PASSWORD), str)
-    certificate = util.convert(conf.get(CONF_CERTIFICATE), str)
-    protocol = util.convert(conf.get(CONF_PROTOCOL), str, DEFAULT_PROTOCOL)
+
+    broker_config = _setup_server(hass, config)
+
+    # Only auto config if no server config was passed in
+    if broker_config and CONF_EMBEDDED not in conf:
+        broker, port, username, password, certificate, protocol = broker_config
+    elif not broker_config and (CONF_EMBEDDED in conf or
+                                CONF_BROKER not in conf):
+        _LOGGER.error('Unable to start broker and auto-configure MQTT.')
+        return False
+
+    if CONF_BROKER in conf:
+        broker = conf[CONF_BROKER]
+        port = util.convert(conf.get(CONF_PORT), int, DEFAULT_PORT)
+        username = util.convert(conf.get(CONF_USERNAME), str)
+        password = util.convert(conf.get(CONF_PASSWORD), str)
+        certificate = util.convert(conf.get(CONF_CERTIFICATE), str)
+        protocol = util.convert(conf.get(CONF_PROTOCOL), str, DEFAULT_PROTOCOL)
 
     if protocol not in (PROTOCOL_31, PROTOCOL_311):
         _LOGGER.error('Invalid protocol specified: %s. Allowed values: %s, %s',
@@ -132,15 +172,34 @@ def setup(hass, config):
         """Handle MQTT publish service calls."""
         msg_topic = call.data.get(ATTR_TOPIC)
         payload = call.data.get(ATTR_PAYLOAD)
+        payload_template = call.data.get(ATTR_PAYLOAD_TEMPLATE)
         qos = call.data.get(ATTR_QOS, DEFAULT_QOS)
         retain = call.data.get(ATTR_RETAIN, DEFAULT_RETAIN)
+        if payload is None:
+            if payload_template is None:
+                _LOGGER.error(
+                    "You must set either '%s' or '%s' to use this service",
+                    ATTR_PAYLOAD, ATTR_PAYLOAD_TEMPLATE)
+                return
+            try:
+                payload = template.render(hass, payload_template)
+            except template.jinja2.TemplateError as exc:
+                _LOGGER.error(
+                    "Unable to publish to '%s': rendering payload template of "
+                    "'%s' failed because %s.",
+                    msg_topic, payload_template, exc)
+                return
         if msg_topic is None or payload is None:
             return
         MQTT_CLIENT.publish(msg_topic, payload, qos, retain)
 
     hass.bus.listen_once(EVENT_HOMEASSISTANT_START, start_mqtt)
 
-    hass.services.register(DOMAIN, SERVICE_PUBLISH, publish_service)
+    descriptions = load_yaml_config_file(
+        os.path.join(os.path.dirname(__file__), 'services.yaml'))
+
+    hass.services.register(DOMAIN, SERVICE_PUBLISH, publish_service,
+                           descriptions.get(SERVICE_PUBLISH))
 
     return True
 
