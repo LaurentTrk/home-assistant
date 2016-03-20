@@ -1,0 +1,20 @@
+<link rel="import" href="../../bower_components/polymer/polymer.html">
+<link rel="import" href="../../bower_components/paper-toggle-button/paper-toggle-button.html">
+
+<link rel="import" href="../components/state-info.html">
+<link rel="import" href="../components/entity/ha-entity-toggle.html">
+
+<dom-module id="state-card-toggle">
+  <style>
+    ha-entity-toggle {
+      margin-left: 16px;
+    }
+  </style>
+  <template>
+    <div class='horizontal justified layout center'>
+      <state-info state-obj="[[stateObj]]"></state-info>
+      <ha-entity-toggle state-obj="[[stateObj]]"></ha-entity-toggle>
+    </div>
+
+  </template>
+</dom-module>

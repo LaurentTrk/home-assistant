@@ -1,0 +1,51 @@
+<link rel="import" href="../../bower_components/polymer/polymer.html">
+
+<link rel="import" href="./entity/state-badge.html">
+<link rel="import" href="relative-ha-datetime.html">
+
+<dom-module id="state-info">
+  <style>
+  :host {
+    line-height: 1.5;
+    min-width: 150px;
+    white-space: nowrap;
+  }
+
+  state-badge {
+    float: left;
+  }
+
+  .info {
+    margin-left: 56px;
+  }
+
+  .name {
+    text-transform: capitalize;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    overflow-x: hidden;
+  }
+
+  .time-ago {
+    color: var(--secondary-text-color);
+    margin-top: -2px;
+    text-overflow: ellipsis;
+    overflow-x: hidden;
+  }
+  </style>
+
+  <template>
+    <div>
+      <state-badge state-obj='[[stateObj]]'></state-badge>
+
+      <div class='info'>
+        <div class='name'>[[stateObj.entityDisplay]]</div>
+
+        <div class='time-ago'>
+          <relative-ha-datetime datetime-obj='[[stateObj.lastChangedAsDate]]'></relative-ha-datetime>
+        </div>
+
+      </div>
+    </div>
+  </template>
+</dom-module>

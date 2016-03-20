@@ -1,0 +1,46 @@
+<link rel='import' href='../../bower_components/polymer/polymer.html'>
+
+<link rel='import' href='../components/ha-card.html'>
+<link rel='import' href='../components/entity/ha-entity-toggle.html'>
+<link rel='import' href='../state-summary/state-card-content.html'>
+
+<dom-module id='ha-domain-card'>
+  <style>
+    .states {
+      padding-bottom: 16px;
+    }
+    .state {
+      padding: 8px 16px;
+      cursor: pointer;
+    }
+    .header {
+      font-size: 24px;
+      padding: 24px 16px 16px;
+      text-transform: capitalize;
+    }
+    .header .name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    ha-entity-toggle {
+      margin-left: 16px;
+    }
+  </style>
+  <template>
+    <ha-card>
+      <div class='header horizontal layout center'>
+        <div class='flex name'>[[computeDomainTitle(domain)]]</div>
+        <template is='dom-if' if='[[showGroupToggle(groupEntity, states)]]'>
+          <ha-entity-toggle state-obj='[[groupEntity]]'></ha-entity-toggle>
+        </template>
+      </div>
+      <div class='states'>
+        <template is='dom-repeat' items="[[states]]">
+          <div class='state' on-tap='entityTapped'>
+            <state-card-content class="state-card" state-obj="[[item]]"></state-card-content>
+          </div>
+        </template>
+      </div>
+    </ha-card>
+  </template>
+</dom-module>
