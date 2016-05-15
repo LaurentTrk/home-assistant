@@ -16,7 +16,8 @@ from homeassistant.const import (
     STATE_ON, SERVICE_TURN_ON, SERVICE_TURN_OFF, SERVICE_TOGGLE,
     ATTR_ENTITY_ID)
 from homeassistant.components import (
-    group, wemo, wink, isy994, verisure, zwave, tellduslive, mysensors, harmony)
+    group, wemo, wink, isy994, verisure,
+    zwave, tellduslive, tellstick, mysensors, harmony, vera)
 
 DOMAIN = 'switch'
 SCAN_INTERVAL = 30
@@ -41,6 +42,8 @@ DISCOVERY_PLATFORMS = {
     tellduslive.DISCOVER_SWITCHES: 'tellduslive',
     mysensors.DISCOVER_SWITCHES: 'mysensors',
     harmony.DISCOVER_SWITCHES: 'harmony',
+    tellstick.DISCOVER_SWITCHES: 'tellstick',
+    vera.DISCOVER_SWITCHES: 'vera',
 }
 
 PROP_TO_ATTR = {
