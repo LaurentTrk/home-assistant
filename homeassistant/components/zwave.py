@@ -4,8 +4,9 @@ Support for Z-Wave.
 For more details about this component, please refer to the documentation at
 https://home-assistant.io/components/zwave/
 """
+import logging
 import os.path
-import sys
+import time
 from pprint import pprint
 
 from homeassistant import bootstrap
@@ -23,29 +24,36 @@ DEFAULT_CONF_USB_STICK_PATH = "/zwaveusbstick"
 CONF_DEBUG = "debug"
 CONF_POLLING_INTERVAL = "polling_interval"
 CONF_POLLING_INTENSITY = "polling_intensity"
-DEFAULT_ZWAVE_CONFIG_PATH = os.path.join(sys.prefix, 'share',
-                                         'python-openzwave', 'config')
+
+# How long to wait for the zwave network to be ready.
+NETWORK_READY_WAIT_SECS = 30
 
 SERVICE_ADD_NODE = "add_node"
 SERVICE_REMOVE_NODE = "remove_node"
 SERVICE_HEAL_NETWORK = "heal_network"
 SERVICE_SOFT_RESET = "soft_reset"
+SERVICE_TEST_NETWORK = "test_network"
 
 DISCOVER_SENSORS = "zwave.sensors"
 DISCOVER_SWITCHES = "zwave.switch"
 DISCOVER_LIGHTS = "zwave.light"
 DISCOVER_BINARY_SENSORS = 'zwave.binary_sensor'
+DISCOVER_THERMOSTATS = 'zwave.thermostat'
+DISCOVER_HVAC = 'zwave.hvac'
+DISCOVER_LOCKS = 'zwave.lock'
 
 EVENT_SCENE_ACTIVATED = "zwave.scene_activated"
 
 COMMAND_CLASS_SWITCH_MULTILEVEL = 38
-
+COMMAND_CLASS_DOOR_LOCK = 98
 COMMAND_CLASS_SWITCH_BINARY = 37
 COMMAND_CLASS_SENSOR_BINARY = 48
 COMMAND_CLASS_SENSOR_MULTILEVEL = 49
 COMMAND_CLASS_METER = 50
 COMMAND_CLASS_BATTERY = 128
 COMMAND_CLASS_ALARM = 113  # 0x71
+COMMAND_CLASS_THERMOSTAT_SETPOINT = 67  # 0x43
+COMMAND_CLASS_THERMOSTAT_FAN_MODE = 68  # 0x44
 
 GENRE_WHATEVER = None
 GENRE_USER = "User"
@@ -80,7 +88,22 @@ DISCOVERY_COMPONENTS = [
      DISCOVER_BINARY_SENSORS,
      [COMMAND_CLASS_SENSOR_BINARY],
      TYPE_BOOL,
-     GENRE_USER)
+     GENRE_USER),
+    ('thermostat',
+     DISCOVER_THERMOSTATS,
+     [COMMAND_CLASS_THERMOSTAT_SETPOINT],
+     TYPE_WHATEVER,
+     GENRE_WHATEVER),
+    ('hvac',
+     DISCOVER_HVAC,
+     [COMMAND_CLASS_THERMOSTAT_FAN_MODE],
+     TYPE_WHATEVER,
+     GENRE_WHATEVER),
+    ('lock',
+     DISCOVER_LOCKS,
+     [COMMAND_CLASS_DOOR_LOCK],
+     TYPE_BOOL,
+     GENRE_USER),
 ]
 
 
@@ -90,6 +113,8 @@ ATTR_VALUE_ID = "value_id"
 ATTR_SCENE_ID = "scene_id"
 
 NETWORK = None
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _obj_to_dict(obj):
@@ -160,9 +185,19 @@ def setup(hass, config):
     # pylint: disable=global-statement, import-error
     global NETWORK
 
+    try:
+        import libopenzwave
+    except ImportError:
+        _LOGGER.error("You are missing required dependency Python Open "
+                      "Z-Wave. Please follow instructions at: "
+                      "https://home-assistant.io/components/zwave/")
+        return False
     from pydispatch import dispatcher
     from openzwave.option import ZWaveOption
     from openzwave.network import ZWaveNetwork
+
+    default_zwave_config_path = os.path.join(os.path.dirname(
+        libopenzwave.__file__), 'config')
 
     # Load configuration
     use_debug = str(config[DOMAIN].get(CONF_DEBUG)) == '1'
@@ -173,7 +208,7 @@ def setup(hass, config):
         config[DOMAIN].get(CONF_USB_STICK_PATH, DEFAULT_CONF_USB_STICK_PATH),
         user_path=hass.config.config_dir,
         config_path=config[DOMAIN].get('config_path',
-                                       DEFAULT_ZWAVE_CONFIG_PATH),)
+                                       default_zwave_config_path),)
 
     options.set_console_output(use_debug)
     options.lock()
@@ -217,8 +252,10 @@ def setup(hass, config):
             node_config = customize.get(name, {})
             polling_intensity = convert(
                 node_config.get(CONF_POLLING_INTENSITY), int)
-            if polling_intensity is not None:
+            if polling_intensity:
                 value.enable_poll(polling_intensity)
+            else:
+                value.disable_poll()
 
             # Fire discovery event
             hass.bus.fire(EVENT_PLATFORM_DISCOVERED, {
@@ -260,6 +297,10 @@ def setup(hass, config):
         """Soft reset the controller."""
         NETWORK.controller.soft_reset()
 
+    def test_network(event):
+        """Test the network by sending commands to all the nodes."""
+        NETWORK.test()
+
     def stop_zwave(event):
         """Stop Z-Wave."""
         NETWORK.stop()
@@ -268,10 +309,30 @@ def setup(hass, config):
         """Startup Z-Wave."""
         NETWORK.start()
 
+        # Need to be in STATE_AWAKED before talking to nodes.
+        # Wait up to NETWORK_READY_WAIT_SECS seconds for the zwave network
+        # to be ready.
+        for i in range(NETWORK_READY_WAIT_SECS):
+            _LOGGER.info(
+                "network state: %d %s", NETWORK.state, NETWORK.state_str)
+            if NETWORK.state >= NETWORK.STATE_AWAKED:
+                _LOGGER.info("zwave ready after %d seconds", i)
+                break
+            time.sleep(1)
+        else:
+            _LOGGER.warning(
+                "zwave not ready after %d seconds, continuing anyway",
+                NETWORK_READY_WAIT_SECS)
+            _LOGGER.info(
+                "final network state: %d %s", NETWORK.state, NETWORK.state_str)
+
         polling_interval = convert(
             config[DOMAIN].get(CONF_POLLING_INTERVAL), int)
         if polling_interval is not None:
             NETWORK.set_poll_interval(polling_interval, False)
+
+        poll_interval = NETWORK.get_poll_interval()
+        _LOGGER.info("zwave polling interval set to %d ms", poll_interval)
 
         hass.bus.listen_once(EVENT_HOMEASSISTANT_STOP, stop_zwave)
 
@@ -281,6 +342,7 @@ def setup(hass, config):
         hass.services.register(DOMAIN, SERVICE_REMOVE_NODE, remove_node)
         hass.services.register(DOMAIN, SERVICE_HEAL_NETWORK, heal_network)
         hass.services.register(DOMAIN, SERVICE_SOFT_RESET, soft_reset)
+        hass.services.register(DOMAIN, SERVICE_TEST_NETWORK, test_network)
 
     hass.bus.listen_once(EVENT_HOMEASSISTANT_START, start_zwave)
 

@@ -18,13 +18,15 @@ from homeassistant.components.media_player import (
     ATTR_MEDIA_VOLUME_LEVEL, ATTR_MEDIA_VOLUME_MUTED,
     ATTR_SUPPORTED_MEDIA_COMMANDS, DOMAIN, SERVICE_PLAY_MEDIA,
     SUPPORT_TURN_OFF, SUPPORT_TURN_ON, SUPPORT_VOLUME_MUTE, SUPPORT_VOLUME_SET,
-    SUPPORT_VOLUME_STEP, MediaPlayerDevice)
+    SUPPORT_VOLUME_STEP, SUPPORT_SELECT_SOURCE, ATTR_INPUT_SOURCE,
+    SERVICE_SELECT_SOURCE, MediaPlayerDevice)
 from homeassistant.const import (
     ATTR_ENTITY_ID, ATTR_ENTITY_PICTURE, CONF_NAME, SERVICE_MEDIA_NEXT_TRACK,
     SERVICE_MEDIA_PAUSE, SERVICE_MEDIA_PLAY, SERVICE_MEDIA_PLAY_PAUSE,
     SERVICE_MEDIA_PREVIOUS_TRACK, SERVICE_MEDIA_SEEK, SERVICE_TURN_OFF,
     SERVICE_TURN_ON, SERVICE_VOLUME_DOWN, SERVICE_VOLUME_MUTE,
-    SERVICE_VOLUME_SET, SERVICE_VOLUME_UP, STATE_IDLE, STATE_OFF, STATE_ON)
+    SERVICE_VOLUME_SET, SERVICE_VOLUME_UP, STATE_IDLE, STATE_OFF, STATE_ON,
+    SERVICE_MEDIA_STOP)
 from homeassistant.helpers.event import track_state_change
 from homeassistant.helpers.service import call_from_config
 
@@ -322,6 +324,11 @@ class UniversalMediaPlayer(MediaPlayerDevice):
         return self._child_attr(ATTR_APP_NAME)
 
     @property
+    def current_source(self):
+        """"Return the current input source of the device."""
+        return self._child_attr(ATTR_INPUT_SOURCE)
+
+    @property
     def supported_media_commands(self):
         """Flag media commands that are supported."""
         flags = self._child_attr(ATTR_SUPPORTED_MEDIA_COMMANDS) or 0
@@ -339,6 +346,9 @@ class UniversalMediaPlayer(MediaPlayerDevice):
         if SERVICE_VOLUME_MUTE in self._cmds and \
                 ATTR_MEDIA_VOLUME_MUTED in self._attrs:
             flags |= SUPPORT_VOLUME_MUTE
+
+        if SUPPORT_SELECT_SOURCE in self._cmds:
+            flags |= SUPPORT_SELECT_SOURCE
 
         return flags
 
@@ -375,6 +385,10 @@ class UniversalMediaPlayer(MediaPlayerDevice):
         """Send pause command."""
         self._call_service(SERVICE_MEDIA_PAUSE)
 
+    def media_stop(self):
+        """Send stop command."""
+        self._call_service(SERVICE_MEDIA_STOP)
+
     def media_previous_track(self):
         """Send previous track command."""
         self._call_service(SERVICE_MEDIA_PREVIOUS_TRACK)
@@ -405,6 +419,11 @@ class UniversalMediaPlayer(MediaPlayerDevice):
     def media_play_pause(self):
         """Play or pause the media player."""
         self._call_service(SERVICE_MEDIA_PLAY_PAUSE)
+
+    def select_source(self, source):
+        """Set the input source."""
+        data = {ATTR_INPUT_SOURCE: source}
+        self._call_service(SERVICE_SELECT_SOURCE, data)
 
     def update(self):
         """Update state in HA."""
